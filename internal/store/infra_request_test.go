@@ -8,6 +8,7 @@ import (
 	"github.com/hashir-zahoor-kh/terrasense/internal/db"
 	"github.com/hashir-zahoor-kh/terrasense/internal/models"
 	"github.com/hashir-zahoor-kh/terrasense/internal/store"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func testDB(t *testing.T) *store.InfraRequestStore {
@@ -60,5 +61,45 @@ func TestCreate_InfraRequest(t *testing.T) {
 	}
 	if got.CreatedAt.IsZero() {
 		t.Error("expected non-zero created_at")
+	}
+}
+
+func TestGetByID_InfraRequest(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	// Seed a row to fetch
+	created, err := s.Create(ctx, "Create an EC2 instance in us-east-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		pool, _ := db.Connect("postgresql://terrasense:terrasense@localhost:5433/terrasense?sslmode=disable")
+		if pool != nil {
+			pool.Exec(context.Background(), "DELETE FROM infra_requests WHERE id = $1", created.ID)
+			pool.Close()
+		}
+	})
+
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID returned error: %v", err)
+	}
+
+	if got.ID != created.ID {
+		t.Errorf("ID mismatch: got %v, want %v", got.ID, created.ID)
+	}
+	if got.NaturalLanguageReq != created.NaturalLanguageReq {
+		t.Errorf("NaturalLanguageReq mismatch: got %q, want %q", got.NaturalLanguageReq, created.NaturalLanguageReq)
+	}
+	if got.Status != models.StatusPending {
+		t.Errorf("expected status=pending, got %q", got.Status)
+	}
+
+	// Non-existent ID must return an error
+	var zero pgtype.UUID
+	_, err = s.GetByID(ctx, zero)
+	if err == nil {
+		t.Error("expected error for zero UUID, got nil")
 	}
 }

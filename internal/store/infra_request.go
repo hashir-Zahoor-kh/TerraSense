@@ -55,7 +55,40 @@ func (s *InfraRequestStore) Create(ctx context.Context, naturalLanguageReq strin
 }
 
 func (s *InfraRequestStore) GetByID(ctx context.Context, id pgtype.UUID) (models.InfraRequest, error) {
-	panic("not implemented")
+	const q = `
+		SELECT id, natural_language_req, generated_hcl, terraform_plan_output,
+		       checkov_score, checkov_warnings, correction_attempts,
+		       status, created_at, updated_at
+		FROM infra_requests
+		WHERE id = $1`
+
+	var r models.InfraRequest
+	var warnings []byte
+
+	row := s.db.QueryRow(ctx, q, id)
+	err := row.Scan(
+		&r.ID,
+		&r.NaturalLanguageReq,
+		&r.GeneratedHCL,
+		&r.TerraformPlanOutput,
+		&r.CheckovScore,
+		&warnings,
+		&r.CorrectionAttempts,
+		&r.Status,
+		&r.CreatedAt,
+		&r.UpdatedAt,
+	)
+	if err != nil {
+		return models.InfraRequest{}, fmt.Errorf("get infra request by id: %w", err)
+	}
+
+	if warnings != nil {
+		if err := unmarshalWarnings(warnings, &r.CheckovWarnings); err != nil {
+			return models.InfraRequest{}, fmt.Errorf("unmarshal checkov_warnings: %w", err)
+		}
+	}
+
+	return r, nil
 }
 
 func (s *InfraRequestStore) ListPending(ctx context.Context) ([]models.InfraRequest, error) {

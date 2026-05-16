@@ -3,6 +3,7 @@ package correction
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/hashir-zahoor-kh/terrasense/internal/models"
@@ -31,7 +32,8 @@ type checkovI interface {
 // infraStoreI is the subset of store.InfraRequestStore used by CorrectionLoop.
 type infraStoreI interface {
 	Create(ctx context.Context, naturalLanguage string) (models.InfraRequest, error)
-	UpdateStatus(ctx context.Context, id pgtype.UUID, status string) error
+	UpdateStatus(ctx context.Context, id pgtype.UUID, status models.RequestStatus) error
+	UpdateHCLAndScore(ctx context.Context, id pgtype.UUID, hcl string, checkovScore int, checkovWarnings []models.CheckovWarning, correctionAttempts int) error
 }
 
 // auditStoreI is the subset of store.AuditLogStore used by CorrectionLoop.
@@ -154,7 +156,7 @@ func (l *CorrectionLoop) Run(ctx context.Context, input LoopInput) (LoopResult, 
 	for {
 		// runValidation runs terraform plan then checkov in sequence and returns
 		// a combined ErrorContext so each loop iteration has the full error picture.
-		_, _, ec, passed := l.runValidation(ctx, hcl, input.WorkspaceID)
+		_, checkovResult, ec, passed := l.runValidation(ctx, hcl, input.WorkspaceID)
 
 		if passed {
 			// Both terraform plan and checkov passed — the HCL is syntactically
@@ -173,6 +175,9 @@ func (l *CorrectionLoop) Run(ctx context.Context, input LoopInput) (LoopResult, 
 		correctionAttempts++
 
 		if correctionAttempts >= l.maxRetries {
+			// Persist whatever was last generated before marking failed so the
+			// portal can show the HCL and score even on a failed request.
+			_ = l.infraStore.UpdateHCLAndScore(ctx, infra.ID, hcl, checkovResult.Score, nil, correctionAttempts)
 			// Retry budget exhausted: mark the DB row failed so the portal surfaces
 			// a clear error rather than leaving the request stuck in "pending".
 			_ = l.infraStore.UpdateStatus(ctx, infra.ID, "failed")
@@ -192,13 +197,14 @@ func (l *CorrectionLoop) Run(ctx context.Context, input LoopInput) (LoopResult, 
 		// Build the correction prompt with both the original HCL and all validation
 		// errors in a single message — one LLM call per retry, not one per error.
 		prompt := buildCorrectionPrompt(hcl, ec)
+		slog.Debug("correction prompt", "prompt", prompt)
 		_ = l.logAuditEvent(ctx, infra.ID, "correction_attempt", map[string]interface{}{
 			"attempt": correctionAttempts,
 		})
 
 		// Ask the LLM for a corrected HCL candidate. The prompt demands raw HCL
 		// with no markdown wrapper so the response can be used directly next iteration.
-		hcl, err = l.llm.Complete(ctx, "", prompt)
+		hcl, err = l.llm.Complete(ctx, "You are a Terraform expert. Return only raw HCL with no markdown, no explanation, and no code fences.", prompt)
 		if err != nil {
 			return LoopResult{}, fmt.Errorf("llm correction attempt %d: %w", correctionAttempts, err)
 		}

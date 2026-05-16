@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -67,6 +68,12 @@ func NewHCLGenerator(client *anthropic.Client) *HCLGenerator {
 	return &HCLGenerator{llm: &anthropicLLMClient{client: client}}
 }
 
+// NewAnthropicLLMClient returns a production LLMClient backed by the given Anthropic client.
+func NewAnthropicLLMClient(client *anthropic.Client) LLMClient {
+	return &anthropicLLMClient{client: client}
+}
+
+
 // NewHCLGeneratorWithLLM allows tests to inject a mock LLMClient without
 // touching the real Anthropic API.
 func NewHCLGeneratorWithLLM(llm LLMClient) *HCLGenerator {
@@ -84,6 +91,12 @@ func (g *HCLGenerator) GenerateHCL(ctx context.Context, input GenerateHCLInput) 
 	if err != nil {
 		return HCLResult{}, fmt.Errorf("llm completion: %w", err)
 	}
+
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
 
 	var result HCLResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"path/filepath"
@@ -93,6 +94,7 @@ func (h *Handler) CreateChange(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID:            req.WorkspaceID,
 	})
 	if err != nil {
+		slog.Error("correction loop failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -256,6 +258,63 @@ func (h *Handler) RejectChange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// GetAuditLog returns the 20 most recent audit log entries.
+func (h *Handler) GetAuditLog(w http.ResponseWriter, r *http.Request) {
+	const q = `SELECT id, request_id, action, actor, details, timestamp
+		FROM audit_logs ORDER BY timestamp DESC LIMIT 20`
+
+	rows, err := h.db.Query(r.Context(), q)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var logs []models.AuditLog
+	for rows.Next() {
+		var l models.AuditLog
+		var details []byte
+		if err := rows.Scan(&l.ID, &l.RequestID, &l.Action, &l.Actor, &details, &l.Timestamp); err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if details != nil {
+			_ = json.Unmarshal(details, &l.Details)
+		}
+		logs = append(logs, l)
+	}
+	if rows.Err() != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, logs)
+}
+
+// GetAnalytics returns three aggregate metrics over all infra requests.
+func (h *Handler) GetAnalytics(w http.ResponseWriter, r *http.Request) {
+	const q = `
+		SELECT
+			COALESCE(SUM(CASE WHEN created_at >= date_trunc('month', CURRENT_DATE) THEN 1 ELSE 0 END), 0),
+			CASE WHEN COUNT(*) > 0
+				THEN COUNT(*) FILTER (WHERE status = 'approved') * 100 / COUNT(*)
+				ELSE 0 END,
+			COALESCE(ROUND(AVG(checkov_score)), 0)
+		FROM infra_requests`
+
+	var totalThisMonth, approvalRatePct, avgCheckovScore int64
+	if err := h.db.QueryRow(r.Context(), q).Scan(&totalThisMonth, &approvalRatePct, &avgCheckovScore); err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int64{
+		"total_changes_this_month": totalThisMonth,
+		"approval_rate_pct":        approvalRatePct,
+		"avg_checkov_score":        avgCheckovScore,
+	})
 }
 
 // DemoReset wipes all infra_requests and re-seeds the 3 demo rows.

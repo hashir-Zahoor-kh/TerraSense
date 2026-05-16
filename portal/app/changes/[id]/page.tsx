@@ -58,7 +58,7 @@ export default function ChangePage({
   const [rejectReason, setRejectReason] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
   useEffect(() => {
     fetch(`${apiUrl}/api/v1/changes/${id}`)

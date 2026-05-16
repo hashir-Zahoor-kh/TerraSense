@@ -44,5 +44,72 @@ func (s *AuditLogStore) Create(ctx context.Context, requestID pgtype.UUID, actio
 }
 
 func (s *AuditLogStore) List(ctx context.Context, filters AuditLogFilters) ([]models.AuditLog, error) {
-	panic("not implemented")
+	// Build the query dynamically based on which filters are set.
+	// $1 and $2 are always LIMIT and OFFSET; optional filters append to args.
+	q := `
+		SELECT id, request_id, action, actor, details, timestamp
+		FROM audit_logs
+		WHERE 1=1`
+
+	args := []interface{}{}
+	argN := 1
+
+	if filters.RequestID != nil {
+		q += fmt.Sprintf(" AND request_id = $%d", argN)
+		args = append(args, *filters.RequestID)
+		argN++
+	}
+	if filters.StartDate != nil {
+		q += fmt.Sprintf(" AND timestamp >= $%d", argN)
+		args = append(args, *filters.StartDate)
+		argN++
+	}
+	if filters.EndDate != nil {
+		q += fmt.Sprintf(" AND timestamp <= $%d", argN)
+		args = append(args, *filters.EndDate)
+		argN++
+	}
+
+	q += " ORDER BY timestamp DESC"
+
+	limit := filters.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	page := filters.Page
+	if page <= 0 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+
+	q += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argN, argN+1)
+	args = append(args, limit, offset)
+
+	rows, err := s.db.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audit logs: %w", err)
+	}
+	defer rows.Close()
+
+	var results []models.AuditLog
+	for rows.Next() {
+		var l models.AuditLog
+		var details []byte
+
+		if err := rows.Scan(&l.ID, &l.RequestID, &l.Action, &l.Actor, &details, &l.Timestamp); err != nil {
+			return nil, fmt.Errorf("scan audit log row: %w", err)
+		}
+		if details != nil {
+			if err := jsonUnmarshal(details, &l.Details); err != nil {
+				return nil, fmt.Errorf("unmarshal audit log details: %w", err)
+			}
+		}
+		results = append(results, l)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit log rows: %w", err)
+	}
+
+	return results, nil
 }

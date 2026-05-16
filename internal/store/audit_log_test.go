@@ -3,9 +3,11 @@ package store_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/hashir-zahoor-kh/terrasense/internal/db"
 	"github.com/hashir-zahoor-kh/terrasense/internal/store"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func testAuditDB(t *testing.T) (*store.InfraRequestStore, *store.AuditLogStore) {
@@ -65,5 +67,65 @@ func TestCreate_AuditLog(t *testing.T) {
 	// nil details must not error
 	if err := auditStore.Create(ctx, req.ID, "generation_complete", "system", nil); err != nil {
 		t.Fatalf("Create audit log with nil details: %v", err)
+	}
+}
+
+func TestList_AuditLog(t *testing.T) {
+	infraStore, auditStore := testAuditDB(t)
+	ctx := context.Background()
+
+	req, err := infraStore.Create(ctx, "Create an EC2 instance for audit list test")
+	if err != nil {
+		t.Fatalf("Create infra request: %v", err)
+	}
+	t.Cleanup(func() {
+		pool, _ := db.Connect("postgresql://terrasense:terrasense@localhost:5433/terrasense?sslmode=disable")
+		if pool != nil {
+			pool.Exec(context.Background(), "DELETE FROM audit_logs WHERE request_id = $1", req.ID)
+			pool.Exec(context.Background(), "DELETE FROM infra_requests WHERE id = $1", req.ID)
+			pool.Close()
+		}
+	})
+
+	// Seed two audit log entries for this request
+	if err := auditStore.Create(ctx, req.ID, "generation_attempt", "system", nil); err != nil {
+		t.Fatalf("Create log 1: %v", err)
+	}
+	if err := auditStore.Create(ctx, req.ID, "generation_complete", "system", nil); err != nil {
+		t.Fatalf("Create log 2: %v", err)
+	}
+
+	// Filter by request ID — must return exactly 2 rows
+	logs, err := auditStore.List(ctx, store.AuditLogFilters{RequestID: &req.ID, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 logs, got %d", len(logs))
+	}
+	for _, l := range logs {
+		if l.RequestID != req.ID {
+			t.Errorf("request_id mismatch: got %v, want %v", l.RequestID, req.ID)
+		}
+	}
+
+	// StartDate in the future — must return 0 rows
+	future := time.Now().Add(time.Hour)
+	logs, err = auditStore.List(ctx, store.AuditLogFilters{RequestID: &req.ID, StartDate: &future, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("List with future StartDate: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Errorf("expected 0 logs with future StartDate, got %d", len(logs))
+	}
+
+	// Zero/unknown request ID — must return 0 rows, no error
+	var zero pgtype.UUID
+	logs, err = auditStore.List(ctx, store.AuditLogFilters{RequestID: &zero, Page: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("List with zero UUID: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Errorf("expected 0 logs for zero UUID, got %d", len(logs))
 	}
 }

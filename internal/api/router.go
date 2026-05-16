@@ -31,5 +31,5 @@ func NewRouter(h *Handler, apiKey string) http.Handler {
 	mux.Handle("POST /api/v1/changes/{id}/reject", auth(http.HandlerFunc(h.RejectChange)))
 	mux.Handle("DELETE /api/v1/demo/reset", auth(http.HandlerFunc(h.DemoReset)))
 
-	return RequestLogger(RecoveryMiddleware(RequestID(mux)))
+	return CORS(RequestLogger(RecoveryMiddleware(RequestID(mux))))
 }

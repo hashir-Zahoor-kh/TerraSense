@@ -84,6 +84,21 @@ func RequireAPIKey(apiKey string) func(http.Handler) http.Handler {
 	}
 }
 
+// CORS sets Access-Control headers on every response and short-circuits OPTIONS
+// preflight requests with 200 OK.
+func CORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func newRequestID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

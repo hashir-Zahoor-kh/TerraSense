@@ -55,6 +55,7 @@ Never use git worktrees. If a worktree exists, copy files to main before committ
 - [x] Phase 5 — Portal (commit ec92041)
 - [x] Phase 6 — Seed Data (commit 5d56f85)
 - [x] Phase 6.5 — Demo seed + reset endpoint (commit 2fb3b72)
+- [x] Security fixes — API key middleware, subprocess timeouts, workspace isolation (commit 5b85f5b)
 - [ ] Phase 7 — End-to-End Test
 - [ ] Phase 8 — README + Deploy
 

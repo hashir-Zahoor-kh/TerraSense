@@ -18,7 +18,7 @@ use the Anthropic SDK.
 - internal/validators — CheckovRunner
 - internal/correction — self-correction loop (the key feature)
 - internal/api — chi router, 5 handlers, middleware
-- portal — Next.js (not started)
+- portal — Next.js (2 pages: pending list, review/approve)
 
 ## Working Directory
 `/Users/hashir/TerraSense`
@@ -52,13 +52,10 @@ Never use git worktrees. If a worktree exists, copy files to main before committ
 - [x] Phase 2 — Database Models (commit 171a80e)
 - [x] Phase 3 — Tools + Correction Loop (commit f7de7fe)
 - [x] Phase 4 — HTTP API (commit 31f31cf)
-- [ ] Phase 5 — Portal (2 pages only: pending list, review/approve)
-- [ ] Phase 6 — Seed Data (5 Terraform modules)
+- [x] Phase 5 — Portal (commit ec92041)
+- [x] Phase 6 — Seed Data (commit 5d56f85)
 - [ ] Phase 7 — End-to-End Test
 - [ ] Phase 8 — README + Deploy
 
 ## Up Next
-Phase 5 — minimal Next.js portal. Two pages only:
-1. `/` — list pending changes with checkov score and resource counts
-2. `/changes/[id]` — HCL viewer, approve and reject buttons
-No animations. No charts. Functional and clean.
+Phase 7 — End-to-End Test

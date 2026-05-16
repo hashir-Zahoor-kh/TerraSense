@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // ErrCheckovNotInstalled is returned when the checkov binary cannot be found.
@@ -80,6 +81,9 @@ func (c *CheckovRunner) RunCheckov(ctx context.Context, input CheckovInput) (Che
 	if _, err := exec.LookPath("checkov"); err != nil {
 		return CheckovResult{}, ErrCheckovNotInstalled{}
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 
 	if err := os.MkdirAll(input.WorkspaceDir, 0755); err != nil {
 		return CheckovResult{}, fmt.Errorf("create workspace dir: %w", err)

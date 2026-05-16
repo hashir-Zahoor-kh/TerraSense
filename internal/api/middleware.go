@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -65,6 +66,22 @@ func RequestID(next http.Handler) http.Handler {
 		r.Header.Set("X-Request-ID", id)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RequireAPIKey returns a middleware that enforces the X-API-Key header.
+// Uses constant-time comparison to prevent timing attacks.
+// Returns 401 if the header is absent or does not match apiKey.
+func RequireAPIKey(apiKey string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got := r.Header.Get("X-API-Key")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(apiKey)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func newRequestID() string {

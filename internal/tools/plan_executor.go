@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // PlanInput is the structured input to RunTerraformPlan.
@@ -84,6 +85,9 @@ func (e *PlanExecutor) RunTerraformPlan(ctx context.Context, input PlanInput) (P
 		}
 		return PlanResult{}, ErrTerraformNotInstalled{}
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	workspaceDir := filepath.Join(e.workingDir, input.WorkspaceID)
 

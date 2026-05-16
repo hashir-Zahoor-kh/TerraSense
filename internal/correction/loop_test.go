@@ -46,15 +46,19 @@ func (m *mockCheckov) RunCheckov(_ context.Context, _ validators.CheckovInput) (
 
 // mockInfraStore records the last status written by UpdateStatus.
 type mockInfraStore struct {
-	lastStatus string
+	lastStatus models.RequestStatus
 }
 
 func (m *mockInfraStore) Create(_ context.Context, _ string) (models.InfraRequest, error) {
 	return models.InfraRequest{ID: testID}, nil
 }
 
-func (m *mockInfraStore) UpdateStatus(_ context.Context, _ pgtype.UUID, status string) error {
+func (m *mockInfraStore) UpdateStatus(_ context.Context, _ pgtype.UUID, status models.RequestStatus) error {
 	m.lastStatus = status
+	return nil
+}
+
+func (m *mockInfraStore) UpdateHCLAndScore(_ context.Context, _ pgtype.UUID, _ string, _ int, _ []models.CheckovWarning, _ int) error {
 	return nil
 }
 

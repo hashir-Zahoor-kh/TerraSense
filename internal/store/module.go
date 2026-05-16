@@ -62,7 +62,26 @@ func (s *ModuleStore) List(ctx context.Context, resourceTypeFilter string) ([]mo
 }
 
 func (s *ModuleStore) GetByName(ctx context.Context, name string) (models.TerraformModule, error) {
-	panic("not implemented")
+	const q = `
+		SELECT id, name, description, hcl_template, resource_types, created_at
+		FROM terraform_modules
+		WHERE name = $1`
+
+	var m models.TerraformModule
+	var resourceTypes []byte
+
+	row := s.db.QueryRow(ctx, q, name)
+	if err := row.Scan(&m.ID, &m.Name, &m.Description, &m.HCLTemplate, &resourceTypes, &m.CreatedAt); err != nil {
+		return models.TerraformModule{}, fmt.Errorf("get module by name %q: %w", name, err)
+	}
+
+	if resourceTypes != nil {
+		if err := jsonUnmarshal(resourceTypes, &m.ResourceTypes); err != nil {
+			return models.TerraformModule{}, fmt.Errorf("unmarshal resource_types: %w", err)
+		}
+	}
+
+	return m, nil
 }
 
 func (s *ModuleStore) BulkInsert(ctx context.Context, modules []models.TerraformModule) error {

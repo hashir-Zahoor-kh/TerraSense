@@ -108,3 +108,32 @@ func TestList_ModuleStore(t *testing.T) {
 		t.Errorf("expected 0 results for non-matching filter, got %d", len(none))
 	}
 }
+
+func TestGetByName_ModuleStore(t *testing.T) {
+	s := testModuleDB(t)
+	ctx := context.Background()
+
+	id := seedModule(t, "test-rds-getbyname", `resource "aws_db_instance" "db" {}`, []string{"aws_db_instance"})
+	t.Cleanup(func() { cleanupModules(t, id) })
+
+	got, err := s.GetByName(ctx, "test-rds-getbyname")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+
+	if got.Name != "test-rds-getbyname" {
+		t.Errorf("Name mismatch: got %q, want %q", got.Name, "test-rds-getbyname")
+	}
+	if len(got.ResourceTypes) != 1 || got.ResourceTypes[0] != "aws_db_instance" {
+		t.Errorf("ResourceTypes mismatch: got %v", got.ResourceTypes)
+	}
+	if got.HCLTemplate == "" {
+		t.Error("expected non-empty HCLTemplate")
+	}
+
+	// Unknown name must return an error
+	_, err = s.GetByName(ctx, "does-not-exist")
+	if err == nil {
+		t.Error("expected error for unknown module name, got nil")
+	}
+}

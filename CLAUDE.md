@@ -24,6 +24,7 @@ Conversational infrastructure provisioning. Natural language → Terraform HCL �
 - **Typed errors everywhere** — no bare `fmt.Errorf` without a caller-checkable type
 - **JSON schemas on all LLM outputs** — unmarshal into structs, return error if malformed
 - **Pause after every phase** — no chaining phases without confirmation
+- **Commit messages** must not mention Claude, Claude Code, or any AI tool. Write commit messages as if a human engineer authored every change.
 
 ## Phase status
 - [x] Phase 1 — Environment Setup (commit 79188a4)

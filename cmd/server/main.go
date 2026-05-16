@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -18,6 +19,8 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	slog.SetLogLoggerLevel(slog.LevelDebug)
 
 	pool, err := db.Connect(cfg.DatabaseURL)
 	if err != nil {

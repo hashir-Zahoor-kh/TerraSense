@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,6 +79,7 @@ func NewCheckovRunnerWithRunner(runner CommandRunner) *CheckovRunner {
 // checkov -d <dir> --output json, and parses the result into CheckovResult.
 // Returns ErrCheckovNotInstalled if the binary is missing.
 func (c *CheckovRunner) RunCheckov(ctx context.Context, input CheckovInput) (CheckovResult, error) {
+	slog.Debug("checkov input", "workspace_dir", input.WorkspaceDir, "hcl_content_length", len(input.HCLContent))
 	if _, err := exec.LookPath("checkov"); err != nil {
 		return CheckovResult{}, ErrCheckovNotInstalled{}
 	}

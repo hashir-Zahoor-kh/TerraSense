@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 
 	"github.com/hashir-zahoor-kh/terrasense/internal/models"
@@ -137,6 +138,11 @@ func (l *CorrectionLoop) Run(ctx context.Context, input LoopInput) (LoopResult, 
 		return LoopResult{}, fmt.Errorf("create infra request: %w", err)
 	}
 
+	// Use the request UUID as workspace ID so ApproveChange can reconstruct the
+	// workspace path without storing workspace_id in the DB.
+	b := infra.ID.Bytes
+	workspaceID := fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+
 	// Generate the initial HCL candidate from the natural language request.
 	// All subsequent iterations refine this candidate; the original is never
 	// mutated so the correction prompt can always show it for context.
@@ -148,7 +154,7 @@ func (l *CorrectionLoop) Run(ctx context.Context, input LoopInput) (LoopResult, 
 	}
 	// Audit every generation attempt so the portal can show a complete history.
 	_ = l.logAuditEvent(ctx, infra.ID, "generation_attempt", map[string]interface{}{
-		"workspace_id": input.WorkspaceID,
+		"workspace_id": workspaceID,
 	})
 
 	hcl := hclResult.HCL
@@ -156,9 +162,12 @@ func (l *CorrectionLoop) Run(ctx context.Context, input LoopInput) (LoopResult, 
 	for {
 		// runValidation runs terraform plan then checkov in sequence and returns
 		// a combined ErrorContext so each loop iteration has the full error picture.
-		_, checkovResult, ec, passed := l.runValidation(ctx, hcl, input.WorkspaceID)
+		_, checkovResult, ec, passed := l.runValidation(ctx, hcl, workspaceID)
 
 		if passed {
+			// Persist the final HCL and checkov score so the portal can display
+			// them before the human approves or rejects the change.
+			_ = l.infraStore.UpdateHCLAndScore(ctx, infra.ID, hcl, checkovResult.Score, nil, correctionAttempts)
 			// Both terraform plan and checkov passed — the HCL is syntactically
 			// valid and meets the security score threshold. The DB row was already
 			// created as "pending" (awaiting human approval in the portal).
@@ -230,7 +239,7 @@ func (l *CorrectionLoop) runValidation(ctx context.Context, hclContent, workspac
 
 	checkovResult, err := l.checkov.RunCheckov(ctx, validators.CheckovInput{
 		HCLContent:   hclContent,
-		WorkspaceDir: workspaceID,
+		WorkspaceDir: filepath.Join(l.workspaceDir, workspaceID),
 	})
 	if err != nil {
 		ec.TerraformErrors = append(ec.TerraformErrors, err.Error())

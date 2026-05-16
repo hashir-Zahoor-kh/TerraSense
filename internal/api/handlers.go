@@ -164,6 +164,7 @@ func (h *Handler) ApproveChange(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		slog.Error("approve failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -174,27 +175,39 @@ func (h *Handler) ApproveChange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.infraStore.UpdateStatus(r.Context(), uid, models.StatusApproved); err != nil {
+		slog.Error("approve failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	if err := h.auditStore.Create(r.Context(), uid, "approved", "system", nil); err != nil {
+		slog.Error("approve failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	workspaceDir := filepath.Join(h.workingDir, uuidToString(uid))
+	initCmd := exec.CommandContext(r.Context(), "terraform", "init", "-input=false", "-no-color")
+	initCmd.Dir = workspaceDir
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		slog.Error("approve failed: terraform init", "error", err, "output", string(out))
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 	cmd := exec.CommandContext(r.Context(), "terraform", "apply", "-auto-approve", "-input=false", "-no-color")
 	cmd.Dir = workspaceDir
-	if _, err := cmd.Output(); err != nil {
+	if out, err := cmd.CombinedOutput(); err != nil {
+		slog.Error("approve failed: terraform apply", "error", err, "output", string(out))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	if err := h.infraStore.UpdateStatus(r.Context(), uid, models.StatusApplied); err != nil {
+		slog.Error("approve failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	if err := h.auditStore.Create(r.Context(), uid, "applied", "system", nil); err != nil {
+		slog.Error("approve failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}

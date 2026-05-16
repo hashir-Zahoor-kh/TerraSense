@@ -8,3 +8,6 @@ __pycache__/
 node_modules/
 .next/
 *.log
+test-workspace-*/
+seed
+seed_demo

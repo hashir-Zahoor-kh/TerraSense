@@ -1,15 +1,32 @@
 # TerraSense — Claude Code Context
 
-## Project
-Conversational infrastructure provisioning. Natural language → Terraform HCL → Checkov validation → human approval portal.
+## Project Overview
+TerraSense is a conversational infrastructure provisioning system. Engineers 
+describe infrastructure in plain English, an LLM generates Terraform HCL, a 
+self-correction loop fixes security and syntax failures automatically, and a 
+human approves or rejects through a minimal portal before anything touches 
+production. Backend is Go, database is PostgreSQL on port 5433, all LLM calls 
+use the Anthropic SDK.
 
-## Working directory
+## Architecture
+- cmd/server — entry point
+- internal/config — env-based config
+- internal/db — pgx connection pool + migrations
+- internal/models — struct definitions
+- internal/store — InfraRequestStore, AuditLogStore, ModuleStore (raw pgx)
+- internal/tools — StateReader, ModuleLister, HCLGenerator, PlanExecutor
+- internal/validators — CheckovRunner
+- internal/correction — self-correction loop (the key feature)
+- internal/api — chi router, 5 handlers, middleware
+- portal — Next.js (not started)
+
+## Working Directory
 `/Users/hashir/TerraSense`
 
-## Git identity
+## Git Identity
 - name: Hashir Zahoor
 - email: hashirzahoorurrahm@mail.adelphi.edu
-- GitHub username: hashir-zahoor-kh
+- GitHub: hashir-zahoor-kh
 
 ## Development Protocol
 - **Stub-first:** write all signatures before any implementation
@@ -20,18 +37,28 @@ Conversational infrastructure provisioning. Natural language → Terraform HCL �
 - **DB port is 5433**, not 5432
 - **Never run `terraform apply`** — plan only. Apply runs only on human approval via `POST /api/v1/changes/{id}/approve`
 - **Mock Anthropic SDK in all tests** — no real API calls in the test suite
-- **No ORM** — raw SQL with pgx. Platform engineers write SQL.
-- **Typed errors everywhere** — no bare `fmt.Errorf` without a caller-checkable type
-- **JSON schemas on all LLM outputs** — unmarshal into structs, return error if malformed
-- **Pause after every phase** — no chaining phases without confirmation
-- **Commit messages** must not mention Claude, Claude Code, or any AI tool. Write commit messages as if a human engineer authored every change.
+- **No ORM** — raw SQL with pgx
+- **Typed errors everywhere**
+- **JSON schemas on all LLM outputs** — unmarshal into structs, error if malformed
+- **Pause after every phase** — no chaining without confirmation
+- **Commit messages** must not mention Claude, Claude Code, or any AI tool
 
-## Phase status
+## File Location Rule
+Always write files directly to `/Users/hashir/TerraSense`.
+Never use git worktrees. If a worktree exists, copy files to main before committing.
+
+## Phase Status
 - [x] Phase 1 — Environment Setup (commit 79188a4)
 - [x] Phase 2 — Database Models (commit 171a80e)
-- [ ] Phase 3 — Core Tools & Correction Loop
-- [ ] Phase 4 — Go HTTP API
-- [ ] Phase 5 — Portal (minimal)
-- [ ] Phase 6 — Seed Data
+- [x] Phase 3 — Tools + Correction Loop (commit f7de7fe)
+- [x] Phase 4 — HTTP API (commit 31f31cf)
+- [ ] Phase 5 — Portal (2 pages only: pending list, review/approve)
+- [ ] Phase 6 — Seed Data (5 Terraform modules)
 - [ ] Phase 7 — End-to-End Test
 - [ ] Phase 8 — README + Deploy
+
+## Up Next
+Phase 5 — minimal Next.js portal. Two pages only:
+1. `/` — list pending changes with checkov score and resource counts
+2. `/changes/[id]` — HCL viewer, approve and reject buttons
+No animations. No charts. Functional and clean.

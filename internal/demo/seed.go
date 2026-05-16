@@ -174,6 +174,10 @@ func SeedDemoRequests(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	defer tx.Rollback(ctx)
 
+	if _, err := tx.Exec(ctx, "DELETE FROM audit_logs"); err != nil {
+		return fmt.Errorf("delete audit_logs: %w", err)
+	}
+
 	if _, err := tx.Exec(ctx, "DELETE FROM infra_requests"); err != nil {
 		return fmt.Errorf("delete infra_requests: %w", err)
 	}

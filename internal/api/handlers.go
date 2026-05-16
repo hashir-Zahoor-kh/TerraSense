@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/hashir-zahoor-kh/terrasense/internal/correction"
+	"github.com/hashir-zahoor-kh/terrasense/internal/demo"
 	"github.com/hashir-zahoor-kh/terrasense/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -255,4 +256,13 @@ func (h *Handler) RejectChange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// DemoReset wipes all infra_requests and re-seeds the 3 demo rows.
+func (h *Handler) DemoReset(w http.ResponseWriter, r *http.Request) {
+	if err := demo.SeedDemoRequests(r.Context(), h.db); err != nil {
+		http.Error(w, "demo reset failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "seeded": "3"})
 }

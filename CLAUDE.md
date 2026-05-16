@@ -54,6 +54,7 @@ Never use git worktrees. If a worktree exists, copy files to main before committ
 - [x] Phase 4 — HTTP API (commit 31f31cf)
 - [x] Phase 5 — Portal (commit ec92041)
 - [x] Phase 6 — Seed Data (commit 5d56f85)
+- [x] Phase 6.5 — Demo seed + reset endpoint (commit 2fb3b72)
 - [ ] Phase 7 — End-to-End Test
 - [ ] Phase 8 — README + Deploy
 

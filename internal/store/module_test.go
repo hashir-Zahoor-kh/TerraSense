@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hashir-zahoor-kh/terrasense/internal/db"
+	"github.com/hashir-zahoor-kh/terrasense/internal/models"
 	"github.com/hashir-zahoor-kh/terrasense/internal/store"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -135,5 +136,51 @@ func TestGetByName_ModuleStore(t *testing.T) {
 	_, err = s.GetByName(ctx, "does-not-exist")
 	if err == nil {
 		t.Error("expected error for unknown module name, got nil")
+	}
+}
+
+func TestBulkInsert_ModuleStore(t *testing.T) {
+	s := testModuleDB(t)
+	ctx := context.Background()
+
+	desc := "bulk test module"
+	modules := []models.TerraformModule{
+		{Name: "test-bulk-s3", Description: &desc, HCLTemplate: `resource "aws_s3_bucket" "b" {}`, ResourceTypes: []string{"aws_s3_bucket"}},
+		{Name: "test-bulk-ec2", Description: &desc, HCLTemplate: `resource "aws_instance" "i" {}`, ResourceTypes: []string{"aws_instance"}},
+	}
+	t.Cleanup(func() {
+		pool, _ := db.Connect("postgresql://terrasense:terrasense@localhost:5433/terrasense?sslmode=disable")
+		if pool != nil {
+			pool.Exec(context.Background(), "DELETE FROM terraform_modules WHERE name = ANY($1)", []string{"test-bulk-s3", "test-bulk-ec2"})
+			pool.Close()
+		}
+	})
+
+	if err := s.BulkInsert(ctx, modules); err != nil {
+		t.Fatalf("BulkInsert: %v", err)
+	}
+
+	// Both rows must exist and be fetchable by name
+	for _, want := range modules {
+		got, err := s.GetByName(ctx, want.Name)
+		if err != nil {
+			t.Fatalf("GetByName(%q) after BulkInsert: %v", want.Name, err)
+		}
+		if got.HCLTemplate != want.HCLTemplate {
+			t.Errorf("%q HCLTemplate mismatch: got %q", want.Name, got.HCLTemplate)
+		}
+		if len(got.ResourceTypes) != len(want.ResourceTypes) || got.ResourceTypes[0] != want.ResourceTypes[0] {
+			t.Errorf("%q ResourceTypes mismatch: got %v", want.Name, got.ResourceTypes)
+		}
+	}
+
+	// Re-running BulkInsert with the same names must upsert without error
+	if err := s.BulkInsert(ctx, modules); err != nil {
+		t.Fatalf("BulkInsert upsert: %v", err)
+	}
+
+	// Empty slice must be a no-op
+	if err := s.BulkInsert(ctx, nil); err != nil {
+		t.Fatalf("BulkInsert nil slice: %v", err)
 	}
 }

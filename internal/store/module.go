@@ -85,5 +85,37 @@ func (s *ModuleStore) GetByName(ctx context.Context, name string) (models.Terraf
 }
 
 func (s *ModuleStore) BulkInsert(ctx context.Context, modules []models.TerraformModule) error {
-	panic("not implemented")
+	if len(modules) == 0 {
+		return nil
+	}
+
+	// Use a single transaction so either all modules land or none do.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin bulk insert transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const q = `
+		INSERT INTO terraform_modules (name, description, hcl_template, resource_types)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (name) DO UPDATE
+		  SET description    = EXCLUDED.description,
+		      hcl_template   = EXCLUDED.hcl_template,
+		      resource_types = EXCLUDED.resource_types`
+
+	for _, m := range modules {
+		rtJSON, err := jsonMarshal(m.ResourceTypes)
+		if err != nil {
+			return fmt.Errorf("marshal resource_types for module %q: %w", m.Name, err)
+		}
+		if _, err := tx.Exec(ctx, q, m.Name, m.Description, m.HCLTemplate, rtJSON); err != nil {
+			return fmt.Errorf("insert module %q: %w", m.Name, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit bulk insert: %w", err)
+	}
+	return nil
 }

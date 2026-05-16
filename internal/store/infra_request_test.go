@@ -103,3 +103,49 @@ func TestGetByID_InfraRequest(t *testing.T) {
 		t.Error("expected error for zero UUID, got nil")
 	}
 }
+
+func TestListPending_InfraRequest(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	// Insert two pending rows
+	r1, err := s.Create(ctx, "Pending request alpha")
+	if err != nil {
+		t.Fatalf("Create r1: %v", err)
+	}
+	r2, err := s.Create(ctx, "Pending request beta")
+	if err != nil {
+		t.Fatalf("Create r2: %v", err)
+	}
+	t.Cleanup(func() {
+		pool, _ := db.Connect("postgresql://terrasense:terrasense@localhost:5433/terrasense?sslmode=disable")
+		if pool != nil {
+			pool.Exec(context.Background(), "DELETE FROM infra_requests WHERE id = ANY($1)", []pgtype.UUID{r1.ID, r2.ID})
+			pool.Close()
+		}
+	})
+
+	list, err := s.ListPending(ctx)
+	if err != nil {
+		t.Fatalf("ListPending returned error: %v", err)
+	}
+
+	// Both inserted rows must appear in the result
+	found := map[string]bool{}
+	for _, r := range list {
+		found[r.NaturalLanguageReq] = true
+	}
+	if !found["Pending request alpha"] {
+		t.Error("expected 'Pending request alpha' in pending list")
+	}
+	if !found["Pending request beta"] {
+		t.Error("expected 'Pending request beta' in pending list")
+	}
+
+	// Every returned row must have status=pending
+	for _, r := range list {
+		if r.Status != models.StatusPending {
+			t.Errorf("expected status=pending, got %q for row %v", r.Status, r.ID)
+		}
+	}
+}

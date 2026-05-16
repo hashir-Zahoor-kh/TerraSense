@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,7 +90,7 @@ func (e *PlanExecutor) RunTerraformPlan(ctx context.Context, input PlanInput) (P
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	workspaceDir := filepath.Join(e.workingDir, input.WorkspaceID)
+	workspaceDir := filepath.Join(e.workingDir, input.WorkspaceID, newRunID())
 
 	if err := writeHCL(workspaceDir, input.HCLContent); err != nil {
 		return PlanResult{}, fmt.Errorf("write HCL: %w", err)
@@ -114,6 +115,17 @@ func (e *PlanExecutor) RunTerraformPlan(ctx context.Context, input PlanInput) (P
 	}
 
 	return result, nil
+}
+
+// newRunID returns a random UUID v4 string using crypto/rand.
+// Each RunTerraformPlan call gets its own subdirectory so concurrent runs
+// with the same workspace_id never collide.
+func newRunID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // writeHCL creates the workspace directory and writes HCL content to main.tf.

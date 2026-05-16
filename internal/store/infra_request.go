@@ -159,7 +159,28 @@ func (s *InfraRequestStore) UpdateStatus(ctx context.Context, id pgtype.UUID, st
 }
 
 func (s *InfraRequestStore) UpdateHCLAndScore(ctx context.Context, id pgtype.UUID, hcl string, score int, warnings []models.CheckovWarning, attempts int) error {
-	panic("not implemented")
+	warningsJSON, err := jsonMarshal(warnings)
+	if err != nil {
+		return fmt.Errorf("marshal checkov_warnings: %w", err)
+	}
+
+	const q = `
+		UPDATE infra_requests
+		SET generated_hcl       = $1,
+		    checkov_score        = $2,
+		    checkov_warnings     = $3,
+		    correction_attempts  = $4,
+		    updated_at           = NOW()
+		WHERE id = $5`
+
+	tag, err := s.db.Exec(ctx, q, hcl, score, warningsJSON, attempts, id)
+	if err != nil {
+		return fmt.Errorf("update hcl and score: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("update hcl and score: no row found for id %v", id)
+	}
+	return nil
 }
 
 // unmarshalWarnings decodes the JSONB checkov_warnings column into a Go slice.

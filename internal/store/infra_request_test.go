@@ -189,3 +189,56 @@ func TestUpdateStatus_InfraRequest(t *testing.T) {
 		t.Error("expected error for zero UUID, got nil")
 	}
 }
+
+func TestUpdateHCLAndScore_InfraRequest(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "Create a VPC with public and private subnets")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		pool, _ := db.Connect("postgresql://terrasense:terrasense@localhost:5433/terrasense?sslmode=disable")
+		if pool != nil {
+			pool.Exec(context.Background(), "DELETE FROM infra_requests WHERE id = $1", created.ID)
+			pool.Close()
+		}
+	})
+
+	hcl := `resource "aws_vpc" "main" { cidr_block = var.cidr }`
+	warnings := []models.CheckovWarning{
+		{CheckID: "CKV_AWS_1", CheckType: "terraform", Resource: "aws_vpc.main", Message: "ensure flow logs enabled", Severity: "MEDIUM"},
+	}
+
+	if err := s.UpdateHCLAndScore(ctx, created.ID, hcl, 85, warnings, 1); err != nil {
+		t.Fatalf("UpdateHCLAndScore: %v", err)
+	}
+
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after update: %v", err)
+	}
+
+	if got.GeneratedHCL == nil || *got.GeneratedHCL != hcl {
+		t.Errorf("GeneratedHCL mismatch: got %v, want %q", got.GeneratedHCL, hcl)
+	}
+	if got.CheckovScore == nil || *got.CheckovScore != 85 {
+		t.Errorf("CheckovScore mismatch: got %v, want 85", got.CheckovScore)
+	}
+	if got.CorrectionAttempts != 1 {
+		t.Errorf("CorrectionAttempts mismatch: got %d, want 1", got.CorrectionAttempts)
+	}
+	if len(got.CheckovWarnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(got.CheckovWarnings))
+	}
+	if got.CheckovWarnings[0].CheckID != "CKV_AWS_1" {
+		t.Errorf("warning CheckID mismatch: got %q", got.CheckovWarnings[0].CheckID)
+	}
+
+	// Unknown ID must return an error
+	var zero pgtype.UUID
+	if err := s.UpdateHCLAndScore(ctx, zero, hcl, 85, nil, 0); err == nil {
+		t.Error("expected error for zero UUID, got nil")
+	}
+}

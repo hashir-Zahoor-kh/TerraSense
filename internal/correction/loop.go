@@ -2,12 +2,42 @@ package correction
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
-	"github.com/hashir-zahoor-kh/terrasense/internal/store"
+	"github.com/hashir-zahoor-kh/terrasense/internal/models"
 	"github.com/hashir-zahoor-kh/terrasense/internal/tools"
 	"github.com/hashir-zahoor-kh/terrasense/internal/validators"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+// generatorI is the subset of tools.HCLGenerator used by CorrectionLoop.
+// Expressed as an interface so tests can substitute a mock without touching
+// the real Anthropic API.
+type generatorI interface {
+	GenerateHCL(ctx context.Context, input tools.GenerateHCLInput) (tools.HCLResult, error)
+}
+
+// executorI is the subset of tools.PlanExecutor used by CorrectionLoop.
+type executorI interface {
+	RunTerraformPlan(ctx context.Context, input tools.PlanInput) (tools.PlanResult, error)
+}
+
+// checkovI is the subset of validators.CheckovRunner used by CorrectionLoop.
+type checkovI interface {
+	RunCheckov(ctx context.Context, input validators.CheckovInput) (validators.CheckovResult, error)
+}
+
+// infraStoreI is the subset of store.InfraRequestStore used by CorrectionLoop.
+type infraStoreI interface {
+	Create(ctx context.Context, naturalLanguage string) (models.InfraRequest, error)
+	UpdateStatus(ctx context.Context, id pgtype.UUID, status string) error
+}
+
+// auditStoreI is the subset of store.AuditLogStore used by CorrectionLoop.
+type auditStoreI interface {
+	Create(ctx context.Context, requestID pgtype.UUID, action, actor string, details map[string]interface{}) error
+}
 
 // ErrorContext accumulates the terraform and checkov errors from a failed
 // generation attempt. Both fields are populated before the correction prompt
@@ -48,11 +78,11 @@ type LoopResult struct {
 // tests substitute mocks for every collaborator without touching the real API,
 // real terraform binary, or real database.
 type CorrectionLoop struct {
-	generator    *tools.HCLGenerator
-	executor     *tools.PlanExecutor
-	checkov      *validators.CheckovRunner
-	infraStore   *store.InfraRequestStore
-	auditStore   *store.AuditLogStore
+	generator    generatorI
+	executor     executorI
+	checkov      checkovI
+	infraStore   infraStoreI
+	auditStore   auditStoreI
 	llm          tools.LLMClient // used for correction prompts (raw HCL response)
 	maxRetries   int
 	workspaceDir string
@@ -63,11 +93,11 @@ type CorrectionLoop struct {
 // up and marks the request as failed — prevents infinite loops on pathological
 // inputs while still tolerating transient LLM quality issues.
 func NewCorrectionLoop(
-	generator *tools.HCLGenerator,
-	executor *tools.PlanExecutor,
-	checkov *validators.CheckovRunner,
-	infraStore *store.InfraRequestStore,
-	auditStore *store.AuditLogStore,
+	generator generatorI,
+	executor executorI,
+	checkov checkovI,
+	infraStore infraStoreI,
+	auditStore auditStoreI,
 	llm tools.LLMClient,
 	maxRetries int,
 	workspaceDir string,
@@ -98,7 +128,81 @@ func NewCorrectionLoop(
 //  5. Every attempt — success or failure — is written to audit_logs so the
 //     approval portal can show a complete correction history.
 func (l *CorrectionLoop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
-	panic("not implemented")
+	// Create a durable DB record before any work begins so the request survives
+	// a mid-loop process crash — the row is queryable by the portal immediately.
+	infra, err := l.infraStore.Create(ctx, input.NaturalLanguageRequest)
+	if err != nil {
+		return LoopResult{}, fmt.Errorf("create infra request: %w", err)
+	}
+
+	// Generate the initial HCL candidate from the natural language request.
+	// All subsequent iterations refine this candidate; the original is never
+	// mutated so the correction prompt can always show it for context.
+	hclResult, err := l.generator.GenerateHCL(ctx, tools.GenerateHCLInput{
+		ResourceDescription: input.NaturalLanguageRequest,
+	})
+	if err != nil {
+		return LoopResult{}, fmt.Errorf("generate HCL: %w", err)
+	}
+	// Audit every generation attempt so the portal can show a complete history.
+	_ = l.logAuditEvent(ctx, infra.ID, "generation_attempt", map[string]interface{}{
+		"workspace_id": input.WorkspaceID,
+	})
+
+	hcl := hclResult.HCL
+	correctionAttempts := 0
+	for {
+		// runValidation runs terraform plan then checkov in sequence and returns
+		// a combined ErrorContext so each loop iteration has the full error picture.
+		_, _, ec, passed := l.runValidation(ctx, hcl, input.WorkspaceID)
+
+		if passed {
+			// Both terraform plan and checkov passed — the HCL is syntactically
+			// valid and meets the security score threshold. The DB row was already
+			// created as "pending" (awaiting human approval in the portal).
+			_ = l.logAuditEvent(ctx, infra.ID, "generation_complete", map[string]interface{}{
+				"correction_attempts": correctionAttempts,
+			})
+			return LoopResult{
+				Success:            true,
+				RequestID:          infra.ID,
+				CorrectionAttempts: correctionAttempts,
+			}, nil
+		}
+
+		correctionAttempts++
+
+		if correctionAttempts >= l.maxRetries {
+			// Retry budget exhausted: mark the DB row failed so the portal surfaces
+			// a clear error rather than leaving the request stuck in "pending".
+			_ = l.infraStore.UpdateStatus(ctx, infra.ID, "failed")
+			_ = l.logAuditEvent(ctx, infra.ID, "correction_exhausted", map[string]interface{}{
+				"correction_attempts": correctionAttempts,
+				"terraform_errors":    ec.TerraformErrors,
+				"checkov_warnings":    ec.CheckovWarnings,
+			})
+			return LoopResult{
+				Success:            false,
+				RequestID:          infra.ID,
+				CorrectionAttempts: correctionAttempts,
+				Errors:             &ec,
+			}, nil
+		}
+
+		// Build the correction prompt with both the original HCL and all validation
+		// errors in a single message — one LLM call per retry, not one per error.
+		prompt := buildCorrectionPrompt(hcl, ec)
+		_ = l.logAuditEvent(ctx, infra.ID, "correction_attempt", map[string]interface{}{
+			"attempt": correctionAttempts,
+		})
+
+		// Ask the LLM for a corrected HCL candidate. The prompt demands raw HCL
+		// with no markdown wrapper so the response can be used directly next iteration.
+		hcl, err = l.llm.Complete(ctx, "", prompt)
+		if err != nil {
+			return LoopResult{}, fmt.Errorf("llm correction attempt %d: %w", correctionAttempts, err)
+		}
+	}
 }
 
 // runValidation runs terraform plan and checkov against hclContent and returns
@@ -106,7 +210,31 @@ func (l *CorrectionLoop) Run(ctx context.Context, input LoopInput) (LoopResult, 
 // the main loop body readable and makes the validation step independently
 // testable without invoking the full loop.
 func (l *CorrectionLoop) runValidation(ctx context.Context, hclContent, workspaceID string) (tools.PlanResult, validators.CheckovResult, ErrorContext, bool) {
-	panic("not implemented")
+	var ec ErrorContext
+	passed := true
+
+	planResult, err := l.executor.RunTerraformPlan(ctx, tools.PlanInput{
+		HCLContent:  hclContent,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		ec.TerraformErrors = append(ec.TerraformErrors, err.Error())
+		passed = false
+	}
+
+	checkovResult, err := l.checkov.RunCheckov(ctx, validators.CheckovInput{
+		HCLContent:   hclContent,
+		WorkspaceDir: workspaceID,
+	})
+	if err != nil {
+		ec.TerraformErrors = append(ec.TerraformErrors, err.Error())
+		passed = false
+	} else if checkovResult.Score < 80 {
+		ec.CheckovWarnings = append(ec.CheckovWarnings, checkovResult.Warnings...)
+		passed = false
+	}
+
+	return planResult, checkovResult, ec, passed
 }
 
 // buildCorrectionPrompt constructs the LLM prompt used for correction attempts.
@@ -116,7 +244,39 @@ func (l *CorrectionLoop) runValidation(ctx context.Context, hclContent, workspac
 // directly as the next candidate HCL — one fewer parse step, one fewer
 // failure mode.
 func buildCorrectionPrompt(originalHCL string, ec ErrorContext) string {
-	panic("not implemented")
+	var b strings.Builder
+
+	b.WriteString("The following HCL failed validation. Fix all errors and warnings.\n\n")
+	b.WriteString("Original HCL:\n")
+	b.WriteString(originalHCL)
+	b.WriteString("\n\n")
+
+	if len(ec.TerraformErrors) > 0 {
+		b.WriteString("Terraform errors:\n")
+		for _, e := range ec.TerraformErrors {
+			b.WriteString("- ")
+			b.WriteString(e)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	if len(ec.CheckovWarnings) > 0 {
+		b.WriteString("Checkov warnings:\n")
+		for _, w := range ec.CheckovWarnings {
+			b.WriteString("- [")
+			b.WriteString(w.CheckID)
+			b.WriteString("] ")
+			b.WriteString(w.Resource)
+			b.WriteString(": ")
+			b.WriteString(w.Message)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("Return ONLY valid HCL. No markdown. No explanation.")
+	return b.String()
 }
 
 // logAuditEvent writes a single entry to audit_logs. Centralising the call

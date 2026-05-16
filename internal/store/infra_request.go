@@ -143,7 +143,19 @@ func (s *InfraRequestStore) ListPending(ctx context.Context) ([]models.InfraRequ
 }
 
 func (s *InfraRequestStore) UpdateStatus(ctx context.Context, id pgtype.UUID, status models.RequestStatus) error {
-	panic("not implemented")
+	const q = `
+		UPDATE infra_requests
+		SET status = $1, updated_at = NOW()
+		WHERE id = $2`
+
+	tag, err := s.db.Exec(ctx, q, status, id)
+	if err != nil {
+		return fmt.Errorf("update infra request status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("update infra request status: no row found for id %v", id)
+	}
+	return nil
 }
 
 func (s *InfraRequestStore) UpdateHCLAndScore(ctx context.Context, id pgtype.UUID, hcl string, score int, warnings []models.CheckovWarning, attempts int) error {

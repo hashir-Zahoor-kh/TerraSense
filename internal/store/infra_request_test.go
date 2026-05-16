@@ -149,3 +149,43 @@ func TestListPending_InfraRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateStatus_InfraRequest(t *testing.T) {
+	s := testDB(t)
+	ctx := context.Background()
+
+	created, err := s.Create(ctx, "Create an RDS instance")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		pool, _ := db.Connect("postgresql://terrasense:terrasense@localhost:5433/terrasense?sslmode=disable")
+		if pool != nil {
+			pool.Exec(context.Background(), "DELETE FROM infra_requests WHERE id = $1", created.ID)
+			pool.Close()
+		}
+	})
+
+	// Transition pending → approved
+	if err := s.UpdateStatus(ctx, created.ID, models.StatusApproved); err != nil {
+		t.Fatalf("UpdateStatus to approved: %v", err)
+	}
+	got, err := s.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID after update: %v", err)
+	}
+	if got.Status != models.StatusApproved {
+		t.Errorf("expected status=approved, got %q", got.Status)
+	}
+
+	// updated_at must have advanced
+	if !got.UpdatedAt.After(created.UpdatedAt) {
+		t.Error("expected updated_at to advance after status update")
+	}
+
+	// Unknown ID must return an error
+	var zero pgtype.UUID
+	if err := s.UpdateStatus(ctx, zero, models.StatusApproved); err == nil {
+		t.Error("expected error for zero UUID, got nil")
+	}
+}

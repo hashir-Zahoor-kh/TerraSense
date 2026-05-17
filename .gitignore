@@ -11,3 +11,4 @@ node_modules/
 test-workspace-*/
 seed
 seed_demo
+server

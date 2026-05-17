@@ -1,6 +1,6 @@
 # TerraSense
 
-TerraSense is a conversational infrastructure provisioning system. An engineer describes what they want in plain English — "a private S3 bucket with versioning and server-side encryption" — and the system generates valid, security-checked Terraform HCL, runs a self-correction loop to fix any issues automatically, and then waits for a human to approve or reject before anything touches a real environment. The backend is written in Go, state is stored in PostgreSQL, and all LLM calls go through the Anthropic SDK.
+TerraSense is a conversational infrastructure provisioning system. An engineer describes what they want in plain English, "a private S3 bucket with versioning and server-side encryption", and the system generates valid, security-checked Terraform HCL, runs a self-correction loop to fix any issues automatically, and then waits for a human to approve or reject before anything touches a real environment. The backend is written in Go, state is stored in PostgreSQL, and all LLM calls go through the Anthropic SDK.
 
 ---
 

@@ -64,7 +64,7 @@ function ScoreBadge({ score }: { score: number | null }) {
 }
 
 async function getChanges(): Promise<Change[]> {
-  const apiUrl = process.env.API_URL ?? "http://localhost:8080";
+  const apiUrl = process.env.API_URL ?? "http://localhost:8000";
   try {
     const res = await fetch(`${apiUrl}/api/v1/changes`, { cache: "no-store" });
     if (!res.ok) return [];

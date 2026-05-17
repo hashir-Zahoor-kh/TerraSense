@@ -1,0 +1,7 @@
+.git
+.claude
+.env
+.env.local
+portal/node_modules
+portal/.next
+mcp_server

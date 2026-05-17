@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TERRASENSE</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0A0A0A;
+      --surface: #111111;
+      --border:  #222222;
+      --text:    #E5E5E5;
+      --muted:   #555555;
+      --dim:     #333333;
+      --accent:  #6366F1;
+      --green:   #22C55E;
+      --red:     #EF4444;
+      --amber:   #F59E0B;
+    }
+
+    html, body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    button {
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      background: none;
+      border: none;
+    }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--dim); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    /* ─── DATA ─────────────────────────────────────────────────────────── */
+
+    const CARDS = [
+      {
+        id: 'S3',
+        tag: 'STORAGE',
+        title: 'S3 BUCKET',
+        desc: 'Versioned object storage with AES-256 encryption at rest.',
+        cmd: '> terrasense create s3-bucket',
+        prompt: 'Create an S3 bucket with versioning and server-side AES-256 encryption',
+      },
+      {
+        id: 'EC2',
+        tag: 'COMPUTE',
+        title: 'EC2 INSTANCE',
+        desc: 't3.medium with IAM role, security group, and auto-scaling.',
+        cmd: '> terrasense create ec2-instance',
+        prompt: 'Provision a t3.medium EC2 instance with IAM role, security group, and auto-scaling group',
+      },
+      {
+        id: 'RDS',
+        tag: 'DATABASE',
+        title: 'RDS POSTGRESQL',
+        desc: 'Multi-AZ managed PostgreSQL 15 with automated backups.',
+        cmd: '> terrasense create rds-postgres',
+        prompt: 'Create an RDS PostgreSQL 15 instance with multi-AZ, automated backups, and storage encryption',
+      },
+      {
+        id: 'VPC',
+        tag: 'NETWORKING',
+        title: 'VPC NETWORK',
+        desc: 'Public/private subnets across 3 AZs with NAT gateway.',
+        cmd: '> terrasense create vpc',
+        prompt: 'Set up a VPC with public and private subnets across 3 availability zones with NAT gateway',
+      },
+      {
+        id: 'EKS',
+        tag: 'KUBERNETES',
+        title: 'EKS CLUSTER',
+        desc: 'Managed Kubernetes 1.29 with IRSA and cluster autoscaler.',
+        cmd: '> terrasense create eks-cluster',
+        prompt: 'Deploy an EKS 1.29 cluster with managed node group, IRSA, and cluster autoscaler',
+      },
+      {
+        id: 'IAM',
+        tag: 'SECURITY',
+        title: 'IAM ROLE',
+        desc: 'Least-privilege IAM role with inline policy and instance profile.',
+        cmd: '> terrasense create iam-role',
+        prompt: 'Create a least-privilege IAM role with an inline policy scoped to S3 read-only access and an EC2 instance profile attachment.',
+      },
+    ];
+
+    /* ─── TERMINAL SEQUENCES ───────────────────────────────────────────── */
+
+    const TF_S3 = `resource "aws_s3_bucket" "main" {
+  bucket = "terrasense-prod-data"
+  tags   = { Environment = "production", ManagedBy = "terraform" }
+}
+
+resource "aws_s3_bucket_versioning" "main" {
+  bucket = aws_s3_bucket.main.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "main" {
+  bucket = aws_s3_bucket.main.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+  }
+}`;
+
+    const TF_S3_FIXED = TF_S3 + `
+
+resource "aws_s3_bucket_logging" "main" {
+  bucket        = aws_s3_bucket.main.id
+  target_bucket = aws_s3_bucket.main.id
+  target_prefix = "access-logs/"
+}
+
+resource "aws_s3_bucket_public_access_block" "main" {
+  bucket                  = aws_s3_bucket.main.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}`;
+
+    const TF_EC2 = `data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter { name = "name"; values = ["al2023-ami-*-x86_64"] }
+}
+
+resource "aws_iam_role" "instance" {
+  name               = "terrasense-instance-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17", Statement = [{
+      Effect    = "Allow", Action = "sts:AssumeRole",
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_security_group" "main" {
+  name        = "terrasense-sg"
+  description = "Managed by Terraform"
+  egress { from_port = 0, to_port = 0, protocol = "-1", cidr_blocks = ["0.0.0.0/0"] }
+}
+
+resource "aws_autoscaling_group" "main" {
+  min_size           = 1
+  max_size           = 5
+  desired_capacity   = 2
+  availability_zones = ["us-east-1a", "us-east-1b"]
+  launch_template    { id = aws_launch_template.main.id, version = "$Latest" }
+}`;
+
+    function buildSequence(card) {
+      if (card.id === 'S3') return [
+        { type: 'cmd',    text: card.prompt },
+        { type: 'blank' },
+        { type: 'sys',    text: '[generating hcl]' },
+        { type: 'blank' },
+        { type: 'code',   text: TF_S3 },
+        { type: 'blank' },
+        { type: 'sys',    text: '[checkov scan — 3 checks]' },
+        { type: 'blank' },
+        { type: 'fail',   text: 'FAIL  CKV_AWS_18   S3 access logging not enabled' },
+        { type: 'fail',   text: 'FAIL  CKV_AWS_54   S3 public access block missing' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_145  Server-side encryption enabled' },
+        { type: 'blank' },
+        { type: 'sys',    text: '[applying correction — iteration 1 / 3]' },
+        { type: 'blank' },
+        { type: 'code',   text: TF_S3_FIXED },
+        { type: 'blank' },
+        { type: 'sys',    text: '[checkov scan — 5 checks]' },
+        { type: 'blank' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_18   S3 access logging enabled' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_54   Public access blocked' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_145  Server-side encryption enabled' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_21   Versioning enabled' },
+        { type: 'pass',   text: 'PASS  CKV2_AWS_6   S3 Block Public Policy enabled' },
+        { type: 'blank' },
+        { type: 'sys',    text: '[5 / 5 checks passed — plan ready for review]' },
+        { type: 'blank' },
+        { type: 'review' },
+      ];
+
+      if (card.id === 'IAM') return [
+        { type: 'cmd',    text: card.prompt },
+        { type: 'blank' },
+        { type: 'sys',    text: '[generating hcl]' },
+        { type: 'blank' },
+        { type: 'code',   text: `resource "aws_iam_role" "s3_readonly" {
+  name = "terrasense-s3-readonly"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "s3_readonly_inline" {
+  name = "s3-read-only"
+  role = aws_iam_role.s3_readonly.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:GetObject", "s3:ListBucket"]
+      Resource = ["arn:aws:s3:::terrasense-prod-data",
+                  "arn:aws:s3:::terrasense-prod-data/*"]
+    }]
+  })
+}
+
+resource "aws_iam_instance_profile" "s3_readonly" {
+  name = "terrasense-s3-readonly-profile"
+  role = aws_iam_role.s3_readonly.name
+}` },
+        { type: 'blank' },
+        { type: 'sys',    text: '[checkov scan — 4 checks]' },
+        { type: 'blank' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_274  IAM role does not allow * actions' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_275  IAM role does not allow * resources' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_40   IAM policy attached via role not user' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_7    IAM role has no inline admin policy' },
+        { type: 'blank' },
+        { type: 'sys',    text: '[4 / 4 checks passed — plan ready for review]' },
+        { type: 'blank' },
+        { type: 'review' },
+      ];
+
+      return [
+        { type: 'cmd',    text: card.prompt },
+        { type: 'blank' },
+        { type: 'sys',    text: '[generating hcl]' },
+        { type: 'blank' },
+        { type: 'code',   text: TF_EC2 },
+        { type: 'blank' },
+        { type: 'sys',    text: '[checkov scan — 7 checks]' },
+        { type: 'blank' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_8    EBS encryption enabled' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_79   IMDSv2 required' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_130  VPC security group restricts ingress' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_189  IAM role follows least privilege' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_25   SG does not allow unrestricted SSH' },
+        { type: 'pass',   text: 'PASS  CKV_AWS_24   SG does not allow unrestricted RDP' },
+        { type: 'pass',   text: 'PASS  CKV2_AWS_5   ASG has health check enabled' },
+        { type: 'blank' },
+        { type: 'sys',    text: '[7 / 7 checks passed — plan ready for review]' },
+        { type: 'blank' },
+        { type: 'review' },
+      ];
+    }
+
+    const DELAY = { cmd: 0, blank: 120, sys: 300, code: 600, fail: 280, pass: 200, review: 200 };
+
+    /* ─── COMPONENTS ───────────────────────────────────────────────────── */
+
+    const HR = () => (
+      <div style={{ borderTop: '1px solid var(--border)', margin: 0 }} />
+    );
+
+    function LandingCard({ card, onClick }) {
+      const [hover, setHover] = useState(false);
+      return (
+        <div
+          onClick={() => onClick(card)}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          style={{
+            border: `1px solid ${hover ? '#444444' : 'var(--border)'}`,
+            padding: '24px',
+            cursor: 'pointer',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '0.02em', color: '#FFFFFF' }}>
+              {card.title}
+            </span>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: 'var(--muted)', paddingTop: 2 }}>
+              {card.tag}
+            </span>
+          </div>
+
+          <p style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.7, flexGrow: 1 }}>
+            {card.desc}
+          </p>
+
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+            <span style={{ fontSize: 11, color: hover ? 'var(--accent)' : 'var(--dim)' }}>
+              {card.cmd}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    function Terminal({ card, onBack }) {
+      const seq = buildSequence(card);
+      const [lines, setLines] = useState([]);
+      const [done, setDone]   = useState(false);
+      const [decision, setDecision] = useState(null);
+      const bottomRef = useRef(null);
+      const idx = useRef(0);
+
+      useEffect(() => {
+        function next() {
+          if (idx.current >= seq.length) { setDone(true); return; }
+          const step = seq[idx.current++];
+          setLines(prev => [...prev, step]);
+          setTimeout(next, DELAY[step.type] ?? 200);
+        }
+        next();
+      }, []);
+
+      useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+      }, [lines]);
+
+      const renderLine = (step, i) => {
+        if (step.type === 'blank') return <div key={i} style={{ height: 6 }} />;
+
+        if (step.type === 'cmd') return (
+          <div key={i} style={{ color: '#FFFFFF', fontWeight: 500 }}>
+            <span style={{ color: 'var(--accent)' }}>{'> '}</span>{step.text}
+          </div>
+        );
+
+        if (step.type === 'sys') return (
+          <div key={i} style={{ color: 'var(--muted)' }}>{step.text}</div>
+        );
+
+        if (step.type === 'code') return (
+          <pre key={i} style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            padding: '16px',
+            overflowX: 'auto',
+            whiteSpace: 'pre',
+            color: '#CCCCCC',
+            fontSize: 12,
+            lineHeight: 1.75,
+          }}>
+            {step.text}
+          </pre>
+        );
+
+        if (step.type === 'pass') return (
+          <div key={i} style={{ color: 'var(--green)', fontWeight: 500 }}>{step.text}</div>
+        );
+
+        if (step.type === 'fail') return (
+          <div key={i} style={{ color: 'var(--red)', fontWeight: 500 }}>{step.text}</div>
+        );
+
+        if (step.type === 'review') {
+          if (decision === 'approved') return (
+            <div key={i}>
+              <div style={{ color: 'var(--green)' }}>Plan approved. terraform apply queued.</div>
+            </div>
+          );
+          if (decision === 'rejected') return (
+            <div key={i}>
+              <div style={{ color: 'var(--red)' }}>Plan rejected. No changes applied.</div>
+            </div>
+          );
+          return (
+            <div key={i} style={{ display: 'flex', gap: 12, paddingTop: 4 }}>
+              <button
+                onClick={() => setDecision('approved')}
+                style={{
+                  border: '1px solid var(--accent)',
+                  color: 'var(--accent)',
+                  padding: '7px 20px',
+                  fontFamily: 'inherit',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  cursor: 'pointer',
+                  background: 'none',
+                }}
+              >
+                APPROVE
+              </button>
+              <button
+                onClick={() => setDecision('rejected')}
+                style={{
+                  border: '1px solid var(--dim)',
+                  color: 'var(--muted)',
+                  padding: '7px 20px',
+                  fontFamily: 'inherit',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  cursor: 'pointer',
+                  background: 'none',
+                }}
+              >
+                REJECT
+              </button>
+            </div>
+          );
+        }
+
+        return null;
+      };
+
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+          {/* Header */}
+          <div style={{ borderBottom: '1px solid var(--border)', padding: '14px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+              <button
+                onClick={onBack}
+                style={{ color: 'var(--muted)', fontFamily: 'inherit', fontSize: 12, letterSpacing: '0.05em', cursor: 'pointer', border: 'none', background: 'none', padding: 0 }}
+              >
+                ← BACK
+              </button>
+              <span style={{ color: 'var(--dim)' }}>/</span>
+              <span style={{ color: '#FFFFFF', fontWeight: 700, letterSpacing: '0.05em' }}>
+                TERRASENSE / {card.title}
+              </span>
+            </div>
+            <span style={{ fontSize: 11, letterSpacing: '0.08em', color: done ? 'var(--green)' : 'var(--muted)' }}>
+              {done ? 'READY' : 'RUNNING'}
+            </span>
+          </div>
+
+          {/* Terminal output */}
+          <div style={{ flex: 1, padding: '28px 32px', overflowY: 'auto' }}>
+            <div style={{ maxWidth: 840, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {lines.map((step, i) => renderLine(step, i))}
+              {!done && (
+                <span style={{ color: 'var(--accent)', fontWeight: 700 }}>█</span>
+              )}
+              <div ref={bottomRef} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Landing({ onOpen }) {
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+          {/* Nav */}
+          <nav style={{ padding: '20px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
+            <span style={{
+              fontFamily: 'Inter, sans-serif',
+              fontWeight: 900,
+              fontSize: 15,
+              letterSpacing: '0.18em',
+              color: '#FFFFFF',
+            }}>
+              TERRASENSE
+            </span>
+            <div style={{ display: 'flex', gap: 28 }}>
+              <a href="#contact" style={{ fontSize: 11, letterSpacing: '0.1em', color: 'var(--muted)' }}>CONTACT</a>
+              <a href="https://github.com/hashir-zahoor-kh/TerraSense" target="_blank" rel="noreferrer" style={{ fontSize: 11, letterSpacing: '0.1em', color: 'var(--muted)' }}>GITHUB</a>
+            </div>
+          </nav>
+
+          {/* Hero */}
+          <section style={{ padding: '80px 32px 72px', maxWidth: 1200, width: '100%', margin: '0 auto' }}>
+            <h1 style={{
+              fontFamily: 'Inter, sans-serif',
+              fontWeight: 900,
+              fontSize: 'clamp(56px, 9vw, 120px)',
+              letterSpacing: '-3px',
+              lineHeight: 0.95,
+              color: '#FFFFFF',
+              marginBottom: 32,
+            }}>
+              TERRASENSE
+            </h1>
+            <p style={{ fontSize: 13, color: 'var(--muted)', maxWidth: 480, lineHeight: 1.7 }}>
+              Describe infrastructure in plain English. An LLM generates Terraform HCL, a correction loop fixes security failures, and a human approves before anything touches production.
+            </p>
+          </section>
+
+          <HR />
+
+          {/* Cards */}
+          <section style={{ padding: '48px 32px', maxWidth: 1200, width: '100%', margin: '0 auto', flexGrow: 1 }}>
+            <div style={{ marginBottom: 28, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11, letterSpacing: '0.12em', color: 'var(--muted)' }}>SELECT TEMPLATE</span>
+              <span style={{ fontSize: 11, color: 'var(--dim)' }}>6 templates</span>
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+              gap: 0,
+              border: '1px solid var(--border)',
+            }}>
+              {CARDS.map((card) => (
+                <div key={card.id} style={{ borderRight: '1px solid var(--border)', borderBottom: '1px solid var(--border)', marginRight: -1, marginBottom: -1 }}>
+                  <LandingCard card={card} onClick={onOpen} />
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <HR />
+
+          {/* Contact */}
+          <section id="contact" style={{ padding: '64px 32px', maxWidth: 1200, width: '100%', margin: '0 auto' }}>
+            <div style={{ border: '1px solid var(--border)', padding: '48px' }}>
+              <div style={{ maxWidth: 560 }}>
+                <h2 style={{
+                  fontFamily: 'Inter, sans-serif',
+                  fontWeight: 900,
+                  fontSize: 'clamp(22px, 3vw, 32px)',
+                  letterSpacing: '-0.5px',
+                  color: '#FFFFFF',
+                  marginBottom: 16,
+                }}>
+                  INTERESTED IN DEPLOYING THIS?
+                </h2>
+                <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.8, marginBottom: 32 }}>
+                  If you'd like TerraSense deployed for your organization, reach out directly.
+                </p>
+                <a
+                  href="mailto:hashirzahoor74@icloud.com"
+                  style={{
+                    display: 'inline-block',
+                    border: '1px solid var(--accent)',
+                    color: 'var(--accent)',
+                    padding: '10px 24px',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    fontFamily: "'JetBrains Mono', monospace",
+                  }}
+                >
+                  hashirzahoor74@icloud.com
+                </a>
+              </div>
+            </div>
+          </section>
+
+          <HR />
+
+          <footer style={{ padding: '20px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: 'var(--dim)', letterSpacing: '0.08em' }}>TERRASENSE</span>
+            <span style={{ fontSize: 10, color: 'var(--dim)' }}>Go · Next.js · Anthropic · Terraform · Checkov</span>
+          </footer>
+        </div>
+      );
+    }
+
+    /* ─── ROOT ──────────────────────────────────────────────────────────── */
+
+    function App() {
+      const [card, setCard] = useState(null);
+
+      if (card) return <Terminal key={card.id} card={card} onBack={() => { setCard(null); window.scrollTo(0, 0); }} />;
+      return <Landing onOpen={c => { setCard(c); window.scrollTo(0, 0); }} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
